@@ -45,6 +45,8 @@ import aiohttp
 import tldextract
 import validators
 from dotenv import load_dotenv
+from utils.checker import check_url_google
+
 from telegram import Update, MessageEntity
 from telegram.constants import ParseMode
 from telegram.ext import (
