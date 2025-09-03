@@ -1,0 +1,6 @@
+python-telegram-bot==21.4
+aiohttp
+aiosqlite
+python-dotenv
+validators
+tldextract
