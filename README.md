@@ -1,6 +1,7 @@
 # Qué hace este bot (AlertadorPY)
 1-Recibe enlaces sospechosos
 El usuario puede mandar cualquier URL directamente al bot o usar comandos (/report, /check).
+<img width="1800" height="1500" alt="alertadorpy_flow" src="https://github.com/user-attachments/assets/ca76c013-0e9c-4cad-a6fa-13826175b662" />
 
 2- Verifica la URL
 
