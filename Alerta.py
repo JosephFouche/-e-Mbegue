@@ -39,7 +39,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
-
+import aiohttp
 import aiosqlite
 import aiohttp
 import tldextract
@@ -243,66 +243,40 @@ status: uno de {clean, suspicious, phish, unknown}.
 
 source: siempre "URLhaus" aquí (la fuente que clasificó).
 
-details: el JSON completo de la AP
+details: el JSON completo de la APi
 """
 
 async def check_urlhaus(session: aiohttp.ClientSession, url: str) -> BlacklistResult:
-    # URLhaus tiene API JSON por URL
-    api = "https://urlhaus.abuse.ch/api/v1/url/"
-    """""
-    async def: es una función asíncrona; se ejecuta con await y no bloquea el loop.
-
-session: aiohttp.ClientSession: es una sesión HTTP reutilizable (mejor performance que crear una por request).
-
-url: str: la URL a verificar.
-
--> BlacklistResult: prometés devolver una tupla (status, source, details), típicamente Tuple[str, str, dict].
-    **/"""
+    api = "https://urlhaus-api.abuse.ch/v1/url/"
 
     try:
-        async with session.post(api, data={"url": url}, timeout=12) as r:
+        # Realizar la solicitud POST con JSON
+        async with session.post(api, json={"url": url}, timeout=12) as r:
             if r.status != 200:
-                ##Si la respuesta HTTP no es 200, devolvés STATUS_UNKNOWN (no pudiste decidir) e informás el código HTTP en details.S
                 return (STATUS_UNKNOWN, "URLhaus", {"http": r.status})
-            j = await r.json(content_type=None)
-            """
-            content_type=None: le dice a aiohttp que intente parsear JSON
-              aunque el header Content-Type no sea exactamente application/json 
-              (útil con APIs que no setean bien el header).
-            """
 
-            if j.get("query_status")=="ok":
-                url_status = j.get("url_status","unknown")
-                if url_status =="online":
-                    return (STATUS_PHISH, "URLhaus",j);
+            # Intentar obtener la respuesta JSON
+            try:
+                j = await r.json(content_type=None)
+            except Exception as e:
+                return (STATUS_UNKNOWN, "URLhaus", {"error": f"Error al parsear JSON: {str(e)}"})
+
+            # Verificar el estado de la consulta
+            if j.get("query_status") == "ok":
+                url_status = j.get("url_status", "unknown")
+                if url_status == "online":
+                    return (STATUS_PHISH, "URLhaus", j)
                 elif url_status == "offline":
-                    return (STATUS_SUSPICIOUS, "URLhaus",j)
+                    return (STATUS_SUSPICIOUS, "URLhaus", j)
                 else:
-                    return (STATUS_SUSPICIOUS, "URLhaus",j)
-                """
-                query_status == "ok": la API encontró la URL en su base.
-
-url_status: estado operativo de la URL reportada por URLhaus:
-
-"online" → la URL maliciosa está activa ahora mismo ⇒ devolvés STATUS_PHISH (confirmado).
-
-"offline" → estuvo en la base, pero ya no está activa ⇒ STATUS_SUSPICIOUS (sigue siendo peligrosa históricamente).
-
-otro/ausente → por cautela, STATUS_SUSPICIOUS.
-                """
-            elif j.get("query_status")=="no_results":
-                return (STATUS_CLEAN, "URLhaus",j)
-            ##No hay resultados en URLhaus para esa URL ⇒ STATUS_CLEAN
+                    return (STATUS_UNKNOWN, "URLhaus", j)
+            elif j.get("query_status") == "no_results":
+                return (STATUS_CLEAN, "URLhaus", j)
             else:
-                return (STATUS_UNKNOWN, "URLhaus",j)
-            ##Cualquier otro query_status (p.ej. formatos raros o cambios futuros en la API) ⇒ STATUS_UNKNOWN
+                return (STATUS_UNKNOWN, "URLhaus", j)
 
     except Exception as e:
-        return (STATUS_UNKNOWN, "URLhaus", {"error": str(e)})
-    """
-    Si ocurre cualquier excepción (timeout, DNS, JSON inválido, etc.), 
-    devolvés STATUS_UNKNOWN y guardás el error en details para depurar.
-    """
+        return (STATUS_UNKNOWN, "URLhaus", {"error": f"Excepción: {str(e)}"})
 
 
 async def aggregate_checks(url: str) -> Tuple[str, str, dict]:
