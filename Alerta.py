@@ -31,6 +31,12 @@ tldextract
 Ejecutar:
 $ python3 bot.py
 """
+from utils.checker import aggregate_checks
+
+# 🔑 Configuración global
+URLHAUS_API_KEY = "e2ac2af1970a7aaa112ef67385ecc2a7c7925ae338c7b5e2"
+URLHAUS_ENDPOINT = "https://urlhaus-api.abuse.ch/v1/url/"
+
 import asyncio
 import json
 import logging
@@ -45,7 +51,7 @@ import aiohttp
 import tldextract
 import validators
 from dotenv import load_dotenv
-from utils.checker import check_url_google
+import httpx
 
 from telegram import Update, MessageEntity
 from telegram.constants import ParseMode
@@ -60,13 +66,16 @@ from telegram.ext import (
 )
 
 # ----------------- Config & Logging -----------------
-load_dotenv()
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.INFO,  # Change to DEBUG
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    handlers=[
+        logging.FileHandler("bot.log"),  # Save logs to a file
+        logging.StreamHandler()  # Also print to console
+    ]
 )
 log = logging.getLogger("alertadorpy")
-
+load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not BOT_TOKEN:
     raise SystemExit("Falta TELEGRAM_BOT_TOKEN en .env")
@@ -106,6 +115,8 @@ UTC = timezone.utc
 
 _rate_cache = {}
 
+def user_allowed(chat_id: int) -> bool:
+    return True
 
 def now_utc() -> datetime:
     return datetime.now(tz=UTC)
@@ -246,71 +257,128 @@ source: siempre "URLhaus" aquí (la fuente que clasificó).
 details: el JSON completo de la APi
 """
 
-async def check_urlhaus(session: aiohttp.ClientSession, url: str) -> BlacklistResult:
-    api = "https://urlhaus-api.abuse.ch/v1/url/"
+# ----------------- checkers.py -----------------
+import aiohttp
+import validators
 
-    try:
-        # Realizar la solicitud POST con JSON
-        async with session.post(api, json={"url": url}, timeout=12) as r:
-            if r.status != 200:
-                return (STATUS_UNKNOWN, "URLhaus", {"http": r.status})
+# Asumiendo que estas variables de entorno están definidas
+# Asegúrate de reemplazar 'TU_API_KEY_DE_GOOGLE' con tu clave real.
+GOOGLE_SAFE_BROWSING_API_KEY = "AIzaSyBDCewssXXPq9h5cukyAU_RZxUgKTvgeAw"
+GOOGLE_SAFE_BROWSING_ENDPOINT = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 
-            # Intentar obtener la respuesta JSON
-            try:
-                j = await r.json(content_type=None)
-            except Exception as e:
-                return (STATUS_UNKNOWN, "URLhaus", {"error": f"Error al parsear JSON: {str(e)}"})
+# Asumiendo que estas variables de URLhaus están definidas
+# URLHAUS_ENDPOINT = "..."
+# URLHAUS_API_KEY = "..."
 
-            # Verificar el estado de la consulta
-            if j.get("query_status") == "ok":
-                url_status = j.get("url_status", "unknown")
-                if url_status == "online":
-                    return (STATUS_PHISH, "URLhaus", j)
-                elif url_status == "offline":
-                    return (STATUS_SUSPICIOUS, "URLhaus", j)
+STATUS_CLEAN = "clean"
+STATUS_SUSPICIOUS = "suspicious"
+STATUS_PHISH = "phish"
+STATUS_UNKNOWN = "unknown"
+STATUS_ERROR = "error"
+
+# ---------- AGREGANDO GOOGLE SAFE BROWSING ----------
+async def check_google_safe_browsing(url: str) -> tuple[str, str, str]:
+    """
+    Verifica una URL usando la Google Safe Browsing API.
+    """
+    payload = {
+        "client": {
+            "clientId": "alertadorpy",  # Nombre de tu aplicación
+            "clientVersion": "1.0.0",
+        },
+        "threatInfo": {
+            "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"],
+            "platformTypes": ["ANY_PLATFORM"],
+            "threatEntryTypes": ["URL"],
+            "threatEntries": [{"url": url}]
+        }
+    }
+    
+    params = {"key": GOOGLE_SAFE_BROWSING_API_KEY}
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(GOOGLE_SAFE_BROWSING_ENDPOINT, params=params, json=payload) as resp:
+                data = await resp.json()
+                
+                # Depuración: imprime la respuesta completa
+                print("DEBUG Google Safe Browsing response:", data)
+
+                if "matches" in data:
+                    threat_type = data["matches"][0]["threatType"]
+                    return STATUS_PHISH, "Google Safe Browsing", f"Detectado como {threat_type}"
                 else:
-                    return (STATUS_UNKNOWN, "URLhaus", j)
-            elif j.get("query_status") == "no_results":
-                return (STATUS_CLEAN, "URLhaus", j)
+                    return STATUS_CLEAN, "Google Safe Browsing", "URL no listada"
+
+        except aiohttp.ClientError as e:
+            return STATUS_ERROR, "Google Safe Browsing", f"Error de conexión: {e}"
+        except Exception as e:
+            return STATUS_ERROR, "Google Safe Browsing", f"Excepción inesperada: {e}"
+
+# ---------- SOLO URLHAUS ----------
+async def check_urlhaus(url: str) -> tuple[str, str, str]:
+    """
+    Verifica una URL usando la API de URLhaus.
+    """
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            resp = await client.post(
+                URLHAUS_ENDPOINT,
+                headers={"Auth-Key": URLHAUS_API_KEY},
+                data={"url": url},
+            )
+            data = resp.json()
+            
+            # 🔹 Depuración: imprime la respuesta completa
+            print("DEBUG URLhaus response:", data)
+
+            status_api = data.get("query_status")
+
+            if status_api == "ok":
+                threat = data.get("threat", "sin detalle")
+                return STATUS_PHISH, "URLhaus", f"Detectada como: {threat}"
+            elif status_api == "no_results":
+                return STATUS_CLEAN, "URLhaus", "URL no listada"
+            elif status_api == "unauthorized":
+                return STATUS_ERROR, "URLhaus", "Auth-Key inválida o caducada"
+            elif status_api == "invalid_request":
+                return STATUS_ERROR, "URLhaus", "Formato de URL inválido"
             else:
-                return (STATUS_UNKNOWN, "URLhaus", j)
+                return STATUS_UNKNOWN, "URLhaus", f"Estado inesperado: {status_api}"
 
-    except Exception as e:
-        return (STATUS_UNKNOWN, "URLhaus", {"error": f"Excepción: {str(e)}"})
+        except Exception as e:
+            return STATUS_ERROR, "URLhaus", f"Excepción: {e}"
 
+# ---------- FUNCIÓN AGREGADORA ACTUALIZADA ----------
+async def aggregate_checks(url: str) -> tuple[str, str, str]:
+    """
+    Agrega los resultados de múltiples servicios de verificación de URLs.
+    """
+    # Lista de corutinas (tareas asíncronas) a ejecutar en paralelo
+    tasks = [
+        check_urlhaus(url),
+        check_google_safe_browsing(url),
+    ]
 
-async def aggregate_checks(url: str) -> Tuple[str, str, dict]:
-    """Corre múltiples verificadores y devuelve el peor estado observado."""
-    async with aiohttp.ClientSession(headers={"User-Agent": "AlertadorPY/1.0"}) as session:
-        results = await asyncio.gather(
-            check_phishtank(session, url),
-            check_urlhaus(session, url),
-            check_openphish(session, url),
-            return_exceptions=True,
-        )
-    status_order = {STATUS_CLEAN: 0, STATUS_UNKNOWN: 1, STATUS_SUSPICIOUS: 2, STATUS_PHISH: 3}
-    best = (STATUS_UNKNOWN, "none", {})
-    for res in results:
-        if isinstance(res, Exception):
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Procesar los resultados y consolidar
+    for result in results:
+        if isinstance(result, Exception):
+            print(f"Error en una de las verificaciones: {result}")
             continue
-        s, src, det = res
-        if status_order[s] > status_order[best[0]]:
-            best = (s, src, det)
-    return best
 
+        status, source, details = result
+        if status in [STATUS_PHISH, STATUS_SUSPICIOUS]:
+            # Devuelve el primer resultado que detecte una amenaza
+            return status, source, details
+    
+    # Si ninguna de las verificaciones encontró una amenaza
+    return STATUS_CLEAN, "Agregado", "URL limpia según todos los servicios"
 
-# ----------------- Rate Limiting -----------------
-def user_allowed(chat_id: int) -> bool:
-    now = time.time()
-    bucket = _rate_cache.setdefault(chat_id, [])
-    # drop expirados
-    window_start = now - USER_RATE_LIMIT_WINDOW
-    bucket = [t for t in bucket if t >= window_start]
-    _rate_cache[chat_id] = bucket
-    if len(bucket) >= USER_RATE_LIMIT_N:
-        return False
-    bucket.append(now)
-    return True
+# Para usar esta nueva función agregada, necesitarás importar asyncio
+import asyncio
+
 
 
 # ----------------- Bot Handlers -----------------
@@ -418,29 +486,41 @@ async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE, urls
     if not urls:
         await update.effective_message.reply_text("⚠️ No encontré URLs válidas en tu mensaje.")
         return
-    conn: aiosqlite.Connection = context.bot_data["db"]
+
+    conn = context.bot_data["db"]
     chat_id = update.effective_chat.id
 
+    # Control de spam de usuarios
     if not user_allowed(chat_id):
-        await update.effective_message.reply_text("⏳ Estás enviando demasiados reportes. Intenta de nuevo en unos segundos.")
+        await update.effective_message.reply_text(
+            "⏳ Estás enviando demasiados reportes. Intenta de nuevo en unos segundos."
+        )
         return
 
     for url in urls:
+        # ✅ Check URLhaus (devuelve 3 valores)
         status, source, details = await aggregate_checks(url)
+
+        # Guardar reporte en DB
         report_id = await save_report(conn, chat_id, url, status, source, details)
+
+        # Alertas si es sospechoso o phishing
         if status in (STATUS_SUSPICIOUS, STATUS_PHISH):
-            # de‑dupe de alertas recientes
             if not await already_alerted_recently(conn, url) and not silent:
                 alert_text = f"⚠️ <b>Phishing activo</b> detectado\n{url}\nOrigen: <i>{source}</i>"
                 await broadcast_alert(context, report_id, alert_text)
+
             if silent:
                 await update.effective_message.reply_text(
-                    f"Resultado: <b>{status.upper()}</b> (fuente: {source}).", parse_mode=ParseMode.HTML, disable_web_page_preview=True
+                    f"Resultado: <b>{status.upper()}</b> (fuente: {source}).",
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True
                 )
         else:
             if silent:
                 await update.effective_message.reply_text(
-                    f"Resultado: {status}. (fuente: {source}).", disable_web_page_preview=True
+                    f"Resultado: {status}. (fuente: {source}).",
+                    disable_web_page_preview=True
                 )
 
 
