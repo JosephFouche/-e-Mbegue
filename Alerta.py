@@ -31,12 +31,11 @@ tldextract
 Ejecutar:
 $ python3 bot.py
 """
+
+
+from dotenv import load_dotenv
+import os
 from utils.checker import aggregate_checks
-
-# 🔑 Configuración global
-URLHAUS_API_KEY = "e2ac2af1970a7aaa112ef67385ecc2a7c7925ae338c7b5e2"
-URLHAUS_ENDPOINT = "https://urlhaus-api.abuse.ch/v1/url/"
-
 import asyncio
 import json
 import logging
@@ -53,6 +52,7 @@ import validators
 from dotenv import load_dotenv
 import httpx
 
+
 from telegram import Update, MessageEntity
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -64,7 +64,18 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-
+load_dotenv()
+# 🔑 Configuración global
+URLHAUS_API_KEY = os.getenv("URLHAUS_API_KEY")  # Se obtiene del .env
+URLHAUS_ENDPOINT = os.getenv(
+    "URLHAUS_ENDPOINT", "https://urlhaus-api.abuse.ch/v1/url/"
+)
+# 🔑 Configuración global Google Safe Browsing
+GOOGLE_SAFE_BROWSING_API_KEY = os.getenv("GOOGLE_SAFE_BROWSING_API_KEY")
+GOOGLE_SAFE_BROWSING_ENDPOINT = os.getenv(
+    "GOOGLE_SAFE_BROWSING_ENDPOINT", 
+    "https://safebrowsing.googleapis.com/v4/threatMatches:find"
+)
 # ----------------- Config & Logging -----------------
 logging.basicConfig(
     level=logging.INFO,  # Change to DEBUG
@@ -261,10 +272,6 @@ details: el JSON completo de la APi
 import aiohttp
 import validators
 
-# Asumiendo que estas variables de entorno están definidas
-# Asegúrate de reemplazar 'TU_API_KEY_DE_GOOGLE' con tu clave real.
-GOOGLE_SAFE_BROWSING_API_KEY = "AIzaSyBDCewssXXPq9h5cukyAU_RZxUgKTvgeAw"
-GOOGLE_SAFE_BROWSING_ENDPOINT = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 
 # Asumiendo que estas variables de URLhaus están definidas
 # URLHAUS_ENDPOINT = "..."

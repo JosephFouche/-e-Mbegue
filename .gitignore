@@ -1,0 +1,32 @@
+# -----------------------
+# Archivos de entorno
+# -----------------------
+.env            # Variables de entorno sensibles
+*.env           # Cualquier otro archivo de entorno
+
+# -----------------------
+# Virtual Environment
+# -----------------------
+venv/           # Entorno virtual local
+__pycache__/    # Caché de Python
+*.pyc           # Archivos compilados
+
+# -----------------------
+# Logs
+# -----------------------
+*.log           # Archivos de log generados por el bot
+
+# -----------------------
+# Bases de datos locales
+# -----------------------
+*.db            # SQLite local
+*.sqlite3       # SQLite alternativa
+
+# -----------------------
+# Otros temporales
+# -----------------------
+*.swp           # Archivos swap de vim
+*.DS_Store      # macOS
+.idea/          # Config de JetBrains / PyCharm
+.vscode/        # Config de VSCode
+*.bak           # Backups locales
